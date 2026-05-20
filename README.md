@@ -1,5 +1,10 @@
 # cargo-crate-split
 
+[![crates.io](https://img.shields.io/crates/v/cargo-crate-split.svg?logo=rust&color=fc8d62)](https://crates.io/crates/cargo-crate-split)
+[![downloads](https://img.shields.io/crates/d/cargo-crate-split.svg?color=66c2a5)](https://crates.io/crates/cargo-crate-split)
+[![license](https://img.shields.io/crates/l/cargo-crate-split.svg?color=8da0cb)](#license)
+[![cargo install](https://img.shields.io/badge/install-cargo%20install%20cargo--crate--split-dca060?logo=rust)](https://crates.io/crates/cargo-crate-split)
+
 Analyze a large single-crate Rust project's **module dependency graph** and propose how to split it into a **workspace of smaller crates** — in a way that is **provably free of circular crate dependencies**, ranked cheapest-first, with a concrete refactor instruction for every edit it asks you to make.
 
 Splitting a monolithic crate is the highest-leverage way to speed up Rust compile times: the crate is rustc's unit of compilation, caching, and parallelism. But Rust forbids circular crate dependencies, so a naive split fails to compile. The hard part isn't moving the code — your IDE already does that. It's deciding **what goes in which crate so the result is a DAG**, and **which few edges are in the way**. That decision is what this tool computes.
