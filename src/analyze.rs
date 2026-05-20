@@ -6,6 +6,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use serde::Serialize;
 
+use crate::classify::{classify, CutClassification};
 use crate::fas::{min_fas_order, NodeId, WeightedEdge};
 use crate::frontier::{compute_frontier, FrontierStep};
 use crate::graph::{LabelEdge, ModuleGraph, Occurrence};
@@ -58,6 +59,8 @@ pub struct BackEdge {
     pub occurrences: Vec<OccurrenceOut>,
     /// The SCC (crate proposal) this cycle belongs to.
     pub scc: usize,
+    /// Inferred cut kind, difficulty, and a concrete how-to-break suggestion.
+    pub classification: CutClassification,
 }
 
 /// A dependency layer grouping crate proposals.
@@ -500,12 +503,16 @@ fn scc_back_edges(
         if tp > sp {
             let occs: Vec<OccurrenceOut> =
                 edge.weight().iter().map(OccurrenceOut::from).collect();
+            let source_module = g[s].label();
+            let target_module = g[t].label();
+            let classification = classify(&source_module, &target_module, &occs);
             out.push(BackEdge {
-                source_module: g[s].label(),
-                target_module: g[t].label(),
+                source_module,
+                target_module,
                 occurrence_count: occs.len(),
                 occurrences: occs,
                 scc: scc_index,
+                classification,
             });
         }
     }

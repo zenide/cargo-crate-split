@@ -99,12 +99,24 @@ pub fn render(a: &Analysis, include_mermaid: bool) -> String {
         );
         for (i, be) in a.back_edges.iter().enumerate() {
             let mark = if i < a.applied_cut_count { "[applied]" } else { "[skipped]" };
+            let c = &be.classification;
             let _ = writeln!(s);
             let _ = writeln!(
                 s,
-                "  ✂ {mark} cut  {} -> {}  ({} occurrence(s)) [SCC #{}]",
-                be.source_module, be.target_module, be.occurrence_count, be.scc
+                "  ✂ {mark} cut  {} -> {}  ({} occurrence(s), {} file(s)) [SCC #{}]",
+                be.source_module,
+                be.target_module,
+                be.occurrence_count,
+                c.distinct_files,
+                be.scc
             );
+            let _ = writeln!(
+                s,
+                "      kind: {}  |  difficulty: {}",
+                c.kind.label(),
+                c.difficulty.label()
+            );
+            let _ = writeln!(s, "      fix: {}", c.suggestion);
             for occ in &be.occurrences {
                 let _ = writeln!(s, "        {}:{}  {}", occ.file, occ.line, occ.path);
             }
@@ -172,5 +184,49 @@ pub fn render(a: &Analysis, include_mermaid: bool) -> String {
         s.push_str(&mermaid::render(a));
     }
 
+    s
+}
+
+/// Render the concise CI architecture-fitness report for `--check`.
+///
+/// Exit-code policy lives in the caller; this only formats. When `pinned` is
+/// true the cuts are *upward-dependency violations* of the user's pinned order;
+/// otherwise they are the edges whose presence makes the crate graph cyclic.
+pub fn render_check(a: &Analysis, pinned: bool) -> String {
+    let mut s = String::new();
+    let mode = if pinned {
+        "respect-order (upward-dependency violations)"
+    } else {
+        "acyclic (cycle-closing edges)"
+    };
+    let _ = writeln!(
+        s,
+        "cargo-crate-split: architecture check of `{}` (granularity {})",
+        a.package_name, a.granularity
+    );
+    let _ = writeln!(s, "  mode: {mode}");
+
+    if a.back_edges.is_empty() {
+        let _ = writeln!(s, "  PASS — no violations. The module graph is clean.");
+        return s;
+    }
+
+    let _ = writeln!(s, "  FAIL — {} violation(s):", a.back_edges.len());
+    for be in &a.back_edges {
+        let c = &be.classification;
+        let _ = writeln!(
+            s,
+            "    {} -> {}  ({} ref(s), {} file(s), {}, {})",
+            be.source_module,
+            be.target_module,
+            be.occurrence_count,
+            c.distinct_files,
+            c.kind.label(),
+            c.difficulty.label()
+        );
+        if let Some(occ) = be.occurrences.first() {
+            let _ = writeln!(s, "        first at {}:{}  {}", occ.file, occ.line, occ.path);
+        }
+    }
     s
 }

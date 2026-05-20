@@ -1,13 +1,14 @@
 [package]
 name = "cargo-crate-split"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Analyze a Rust crate's module graph and propose a provably-acyclic split into workspace crates."
+description = "Analyze a Rust crate's module graph and propose a provably-acyclic split into workspace crates, with per-cut refactor suggestions and a CI architecture-fitness guard."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/zenide/cargo-crate-split"
 readme = "README.md"
 keywords = ["cargo", "refactoring", "crates", "workspace", "modules"]
 categories = ["development-tools::cargo-plugins"]
+exclude = [".idea", "target"]
 
 [[bin]]
 name = "cargo-crate-split"

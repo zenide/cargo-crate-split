@@ -1,4 +1,5 @@
 mod analyze;
+mod classify;
 mod cli;
 mod discover;
 mod fas;

@@ -58,6 +58,11 @@ enum Command {
         /// exceed M. Mutually exclusive with `--max-cuts`.
         #[arg(long, value_name = "M", conflicts_with = "max_cuts")]
         budget: Option<usize>,
+        /// CI architecture-fitness guard: exit non-zero if any cut is required
+        /// (a cycle, or — with `--respect-order` — an upward dependency that
+        /// violates the pinned layering). Prints a concise, greppable list.
+        #[arg(long)]
+        check: bool,
     },
     /// Generate an empty workspace skeleton for the proposed split.
     Scaffold {
@@ -87,6 +92,7 @@ pub fn run() -> Result<()> {
             respect_order,
             max_cuts,
             budget,
+            check,
         } => {
             let pinned = respect_order.as_deref().map(parse_respect_order).transpose()?;
             let cut_budget = match (max_cuts, budget) {
@@ -99,7 +105,13 @@ pub fn run() -> Result<()> {
             let mg = build_graph(&disc, granularity)?;
             let analysis =
                 analyze_with_budget(&mg, &disc.info.package_name, pinned.as_deref(), cut_budget);
-            if as_json {
+            if check {
+                let pinned_check = pinned.is_some();
+                print!("{}", text::render_check(&analysis, pinned_check));
+                if !analysis.back_edges.is_empty() {
+                    std::process::exit(1);
+                }
+            } else if as_json {
                 println!("{}", json::render(&analysis)?);
             } else {
                 print!("{}", text::render(&analysis, mermaid));
