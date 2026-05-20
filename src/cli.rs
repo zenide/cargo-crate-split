@@ -9,7 +9,16 @@ use crate::analyze::analyze;
 use crate::discover::discover;
 use crate::graph::build_graph;
 use crate::report::{json, text};
+use crate::respect_order::parse_respect_order;
 use crate::scaffold::scaffold;
+
+/// Shared `--help` text documenting the `--respect-order` SPEC format.
+const RESPECT_ORDER_HELP: &str = "\
+Pinned module order from foundation to top, separated by `,` or `<` (e.g. \
+\"models,queries,db,ai,handlers,app\" or \"models < queries < handlers\"). \
+When set, back-edges are the edges that VIOLATE this intended order (a module \
+depending \"upward\"), instead of the computed ELS feedback-arc-set. Modules \
+not named keep their computed position, after the pinned ones they depend on.";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -38,6 +47,9 @@ enum Command {
         /// Emit the analysis as JSON instead of text.
         #[arg(long)]
         json: bool,
+        /// Pinned module order from foundation to top (`,` or `<` separated).
+        #[arg(long, value_name = "SPEC", long_help = RESPECT_ORDER_HELP)]
+        respect_order: Option<String>,
     },
     /// Generate an empty workspace skeleton for the proposed split.
     Scaffold {
@@ -49,6 +61,9 @@ enum Command {
         /// Module granularity.
         #[arg(long, default_value_t = 1)]
         granularity: usize,
+        /// Pinned module order from foundation to top (`,` or `<` separated).
+        #[arg(long, value_name = "SPEC", long_help = RESPECT_ORDER_HELP)]
+        respect_order: Option<String>,
     },
 }
 
@@ -61,10 +76,12 @@ pub fn run() -> Result<()> {
             granularity,
             mermaid,
             json: as_json,
+            respect_order,
         } => {
+            let pinned = respect_order.as_deref().map(parse_respect_order).transpose()?;
             let disc = discover(&path)?;
             let mg = build_graph(&disc, granularity)?;
-            let analysis = analyze(&mg, &disc.info.package_name);
+            let analysis = analyze(&mg, &disc.info.package_name, pinned.as_deref());
             if as_json {
                 println!("{}", json::render(&analysis)?);
             } else {
@@ -75,10 +92,12 @@ pub fn run() -> Result<()> {
             path,
             out,
             granularity,
+            respect_order,
         } => {
+            let pinned = respect_order.as_deref().map(parse_respect_order).transpose()?;
             let disc = discover(&path)?;
             let mg = build_graph(&disc, granularity)?;
-            let analysis = analyze(&mg, &disc.info.package_name);
+            let analysis = analyze(&mg, &disc.info.package_name, pinned.as_deref());
             let created = scaffold(&analysis, &out)?;
             println!(
                 "Scaffolded workspace at {} ({} crate(s)):",

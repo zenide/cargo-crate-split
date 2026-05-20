@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
 use serde::Serialize;
 
+use crate::fas::{min_fas_order, NodeId, WeightedEdge};
 use crate::graph::{ModuleGraph, Occurrence};
 
 /// A reference occurrence rendered for output.
@@ -122,7 +122,14 @@ fn crate_name_for(prefix: &str, modules: &[String]) -> String {
 }
 
 /// Run SCC + condensation + layering + back-edge analysis.
-pub fn analyze(mg: &ModuleGraph, package_name: &str) -> Analysis {
+///
+/// `respect_order`, when `Some`, is a user-supplied module order (foundation
+/// first) used to detect back-edges instead of the ELS-computed ordering: any
+/// intra-SCC edge that points "upward" relative to this order is reported as a
+/// violation. Modules not named in the spec keep their ELS-computed position
+/// (placed after the named ones they depend on). When `None`, the weighted ELS
+/// (GR) heuristic computes the order per SCC.
+pub fn analyze(mg: &ModuleGraph, package_name: &str, respect_order: Option<&[String]>) -> Analysis {
     let g = &mg.graph;
     let prefix = crate_prefix(package_name);
 
@@ -198,7 +205,7 @@ pub fn analyze(mg: &ModuleGraph, package_name: &str) -> Analysis {
         if comp.len() <= 1 {
             continue;
         }
-        back_edges.extend(scc_back_edges(g, comp, i));
+        back_edges.extend(scc_back_edges(g, comp, i, respect_order));
     }
     // Rank globally by fewest occurrences first (cheapest to remove).
     back_edges.sort_by(|a, b| {
@@ -298,74 +305,84 @@ fn dedup_crate_names(proposals: &mut [CrateProposal]) {
     }
 }
 
-/// Compute back-edges within a single SCC via a DFS finishing order.
-/// Any intra-SCC edge from a later-finished node to an earlier position in
-/// the order is a back-edge candidate (heuristic minimal feedback arc set).
+/// Compute back-edges within a single SCC.
+///
+/// Default mode: a weighted vertex ordering (Eades–Lin–Smyth / GR heuristic,
+/// weighted by occurrence count) that approximately maximizes forward-edge
+/// weight. Back-edges = intra-SCC edges `u -> v` where `v` precedes `u` in the
+/// order. Because the order maximizes forward weight, the cut edges are the
+/// light minority-direction ones.
+///
+/// `respect_order` mode: use the user's pinned module order (foundation first)
+/// as the vertex order. Modules not named keep their ELS-computed position. Any
+/// edge that points "upward" (target later than source in the intended order)
+/// is reported as a violation to cut.
 fn scc_back_edges(
     g: &petgraph::graph::DiGraph<crate::graph::ModuleNode, crate::graph::EdgeWeight>,
     comp: &[NodeIndex],
     scc_index: usize,
+    respect_order: Option<&[String]>,
 ) -> Vec<BackEdge> {
     let member: HashSet<NodeIndex> = comp.iter().copied().collect();
 
-    // DFS over the subgraph induced by `comp`, recording finishing order.
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut finish: Vec<NodeIndex> = Vec::new();
+    // Map this SCC's NodeIndex set to contiguous FAS NodeIds.
+    let mut to_id: HashMap<NodeIndex, NodeId> = HashMap::new();
+    let mut to_node: Vec<NodeIndex> = Vec::with_capacity(comp.len());
+    let mut sorted_comp = comp.to_vec();
+    sorted_comp.sort_by_key(|&n| g[n].label());
+    for &n in &sorted_comp {
+        to_id.insert(n, to_node.len());
+        to_node.push(n);
+    }
+    let nodes: Vec<NodeId> = (0..to_node.len()).collect();
 
-    // Deterministic start order.
-    let mut start_nodes = comp.to_vec();
-    start_nodes.sort_by_key(|&n| g[n].label());
-
-    fn dfs(
-        node: NodeIndex,
-        g: &petgraph::graph::DiGraph<crate::graph::ModuleNode, crate::graph::EdgeWeight>,
-        member: &HashSet<NodeIndex>,
-        visited: &mut HashSet<NodeIndex>,
-        finish: &mut Vec<NodeIndex>,
-    ) {
-        visited.insert(node);
-        let mut succ: Vec<NodeIndex> = g
-            .neighbors_directed(node, Direction::Outgoing)
-            .filter(|n| member.contains(n))
-            .collect();
-        succ.sort_by_key(|&n| g[n].label());
-        for s in succ {
-            if !visited.contains(&s) {
-                dfs(s, g, member, visited, finish);
-            }
+    // Build weighted edges among the SCC members (collapse parallel edges by
+    // summing occurrence counts).
+    let mut weighted: Vec<WeightedEdge> = Vec::new();
+    for edge in g.edge_references() {
+        let s = edge.source();
+        let t = edge.target();
+        if s == t || !member.contains(&s) || !member.contains(&t) {
+            continue;
         }
-        finish.push(node);
+        weighted.push(WeightedEdge {
+            from: to_id[&s],
+            to: to_id[&t],
+            weight: edge.weight().len() as u64,
+        });
     }
 
-    for &n in &start_nodes {
-        if !visited.contains(&n) {
-            dfs(n, g, &member, &mut visited, &mut finish);
+    // Determine the vertex order, oriented FOUNDATION-FIRST (dependencies
+    // before dependents) so both modes share one back-edge rule.
+    //
+    // `min_fas_order` returns a source-first order: a "forward" edge `u -> v`
+    // (kept, not cut) has `u` before `v`. Since our edges mean "source depends
+    // on target", source-first puts dependents first. We reverse it to get a
+    // foundation-first order, matching the `--respect-order` spec orientation.
+    // The pinned spec is already foundation-first.
+    let order: Vec<NodeId> = match respect_order {
+        None => {
+            let mut o = min_fas_order(&nodes, &weighted);
+            o.reverse();
+            o
         }
-    }
+        Some(spec) => pinned_order(g, &sorted_comp, &to_id, &nodes, &weighted, spec),
+    };
+    let pos: HashMap<NodeId, usize> = order.iter().enumerate().map(|(i, &n)| (n, i)).collect();
 
-    // Topological-ish order = reverse finishing order. Position in this order.
-    let order: Vec<NodeIndex> = finish.iter().rev().copied().collect();
-    let pos: HashMap<NodeIndex, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, &n)| (n, i))
-        .collect();
-
-    // Any intra-SCC edge whose target comes before its source in `order`
-    // is a back-edge.
+    // In a foundation-first order a healthy edge points "downward" (a dependent
+    // references a more-foundational module: pos(target) < pos(source)). A
+    // back-edge / violation is `u -> v` where `v` is LATER (higher) than `u` —
+    // a module depending "upward".
     let mut out: Vec<BackEdge> = Vec::new();
     for edge in g.edge_references() {
         let s = edge.source();
         let t = edge.target();
-        if !member.contains(&s) || !member.contains(&t) {
+        if s == t || !member.contains(&s) || !member.contains(&t) {
             continue;
         }
-        if s == t {
-            continue;
-        }
-        let (sp, tp) = (pos[&s], pos[&t]);
-        if tp <= sp {
-            // back-edge (target earlier-or-equal in topo order)
+        let (sp, tp) = (pos[&to_id[&s]], pos[&to_id[&t]]);
+        if tp > sp {
             let occs: Vec<OccurrenceOut> =
                 edge.weight().iter().map(OccurrenceOut::from).collect();
             out.push(BackEdge {
@@ -383,4 +400,50 @@ fn scc_back_edges(
             .then(a.source_module.cmp(&b.source_module))
     });
     out
+}
+
+/// Build a pinned vertex order from a user `--respect-order` spec.
+///
+/// Named modules take the positions given by `spec` (foundation first).
+/// Unlisted modules are appended after all named ones, placed by their
+/// ELS-computed relative order so they still sort after the pinned modules they
+/// depend on. The result is a permutation of `nodes`.
+fn pinned_order(
+    g: &petgraph::graph::DiGraph<crate::graph::ModuleNode, crate::graph::EdgeWeight>,
+    sorted_comp: &[NodeIndex],
+    to_id: &HashMap<NodeIndex, NodeId>,
+    nodes: &[NodeId],
+    weighted: &[WeightedEdge],
+    spec: &[String],
+) -> Vec<NodeId> {
+    // Label -> NodeId for members of this SCC.
+    let label_to_id: HashMap<String, NodeId> = sorted_comp
+        .iter()
+        .map(|&n| (g[n].label(), to_id[&n]))
+        .collect();
+
+    let mut placed: HashSet<NodeId> = HashSet::new();
+    let mut order: Vec<NodeId> = Vec::with_capacity(nodes.len());
+
+    // 1. Named modules present in this SCC, in spec order.
+    for label in spec {
+        if let Some(&id) = label_to_id.get(label) {
+            if placed.insert(id) {
+                order.push(id);
+            }
+        }
+    }
+
+    // 2. Unlisted modules: appended after all named ones (so they sort after
+    //    the pinned modules they depend on), using their ELS-relative order
+    //    reversed to foundation-first to match the spec orientation.
+    let mut els = min_fas_order(nodes, weighted);
+    els.reverse();
+    for id in els {
+        if placed.insert(id) {
+            order.push(id);
+        }
+    }
+
+    order
 }

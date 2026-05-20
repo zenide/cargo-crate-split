@@ -1,10 +1,12 @@
 mod analyze;
 mod cli;
 mod discover;
+mod fas;
 mod graph;
 mod module_path;
 mod parse;
 mod report;
+mod respect_order;
 mod scaffold;
 
 fn main() -> anyhow::Result<()> {
