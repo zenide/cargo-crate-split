@@ -4,6 +4,7 @@
 [![downloads](https://img.shields.io/crates/d/cargo-crate-split.svg?color=66c2a5)](https://crates.io/crates/cargo-crate-split)
 [![license](https://img.shields.io/crates/l/cargo-crate-split.svg?color=8da0cb)](#license)
 [![cargo install](https://img.shields.io/badge/install-cargo%20install%20cargo--crate--split-dca060?logo=rust)](https://crates.io/crates/cargo-crate-split)
+[![skill](https://img.shields.io/badge/agent%20skill-npx%20skills%20add-e78ac3?logo=anthropic)](https://github.com/vercel-labs/skills)
 
 Analyze a large single-crate Rust project's **module dependency graph** and propose how to split it into a **workspace of smaller crates** — in a way that is **provably free of circular crate dependencies**, ranked cheapest-first, with a concrete refactor instruction for every edit it asks you to make.
 
@@ -25,13 +26,22 @@ cargo crate-split analyze ./path/to/crate
 
 ### Install the coding-agent skill
 
-This repo ships a [`SKILL.md`](./SKILL.md) so Claude Code (and compatible agents) know when and how to drive the tool. Drop it into your project:
+This repo ships a [`SKILL.md`](./SKILL.md) so Claude Code (and compatible agents) know when and how to drive the tool. Install it in one command with [`npx skills`](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add zenide/cargo-crate-split          # project-level (.claude/skills/)
+npx skills add zenide/cargo-crate-split -g        # or globally (~/.claude/skills/)
+```
+
+<details>
+<summary>Manual install (no npx)</summary>
 
 ```sh
 mkdir -p .claude/skills/cargo-crate-split
 curl -fsSL https://raw.githubusercontent.com/zenide/cargo-crate-split/main/SKILL.md \
   -o .claude/skills/cargo-crate-split/SKILL.md
 ```
+</details>
 
 Now an agent can answer "can we split this crate to speed up builds?" by running the tool and acting on the ranked, classified suggestions — including the exact type to move for each cut.
 
