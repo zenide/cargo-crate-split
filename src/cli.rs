@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
-use crate::analyze::analyze;
+use crate::analyze::{analyze, analyze_with_budget, CutBudget};
 use crate::discover::discover;
 use crate::graph::build_graph;
 use crate::report::{json, text};
@@ -50,6 +50,14 @@ enum Command {
         /// Pinned module order from foundation to top (`,` or `<` separated).
         #[arg(long, value_name = "SPEC", long_help = RESPECT_ORDER_HELP)]
         respect_order: Option<String>,
+        /// Apply only the N cheapest cuts when forming the proposed split.
+        /// The proposal is then the decomposition of `G − (those N cuts)`.
+        #[arg(long, value_name = "N")]
+        max_cuts: Option<usize>,
+        /// Apply cheapest cuts until cumulative reference occurrences would
+        /// exceed M. Mutually exclusive with `--max-cuts`.
+        #[arg(long, value_name = "M", conflicts_with = "max_cuts")]
+        budget: Option<usize>,
     },
     /// Generate an empty workspace skeleton for the proposed split.
     Scaffold {
@@ -77,11 +85,20 @@ pub fn run() -> Result<()> {
             mermaid,
             json: as_json,
             respect_order,
+            max_cuts,
+            budget,
         } => {
             let pinned = respect_order.as_deref().map(parse_respect_order).transpose()?;
+            let cut_budget = match (max_cuts, budget) {
+                (Some(_), Some(_)) => bail!("--max-cuts and --budget are mutually exclusive"),
+                (Some(n), None) => CutBudget::MaxCuts(n),
+                (None, Some(m)) => CutBudget::Refs(m),
+                (None, None) => CutBudget::All,
+            };
             let disc = discover(&path)?;
             let mg = build_graph(&disc, granularity)?;
-            let analysis = analyze(&mg, &disc.info.package_name, pinned.as_deref());
+            let analysis =
+                analyze_with_budget(&mg, &disc.info.package_name, pinned.as_deref(), cut_budget);
             if as_json {
                 println!("{}", json::render(&analysis)?);
             } else {

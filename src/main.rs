@@ -2,6 +2,7 @@ mod analyze;
 mod cli;
 mod discover;
 mod fas;
+mod frontier;
 mod graph;
 mod module_path;
 mod parse;

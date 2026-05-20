@@ -143,6 +143,59 @@ pub fn build_graph(disc: &Discovery, granularity: usize) -> anyhow::Result<Modul
     Ok(ModuleGraph { graph, granularity })
 }
 
+/// A directed edge between two module labels, used to identify cuts
+/// independently of `NodeIndex` (which is graph-instance specific).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LabelEdge {
+    pub source: String,
+    pub target: String,
+}
+
+impl ModuleGraph {
+    /// Compute the strongly-connected components of this graph with the given
+    /// set of label-edges removed (`G − cuts`).
+    ///
+    /// This does NOT mutate the underlying graph: it builds a filtered adjacency
+    /// view and runs Tarjan's SCC on that view. Returns the SCCs as groups of
+    /// `NodeIndex` (in petgraph's reverse-topological order), matching the shape
+    /// of `petgraph::algo::tarjan_scc`.
+    ///
+    /// An edge `s -> t` is removed iff the `(label(s), label(t))` pair is present
+    /// in `cuts`. All parallel occurrences of that module pair are removed
+    /// together (cuts are reasoned about at the module-pair level).
+    pub fn sccs_without(&self, cuts: &std::collections::HashSet<LabelEdge>) -> Vec<Vec<NodeIndex>> {
+        use petgraph::visit::EdgeRef;
+
+        let g = &self.graph;
+        // Build a filtered DiGraph carrying the same node count; node weights are
+        // not needed for SCC, so we use unit nodes and preserve index parity by
+        // adding nodes in NodeIndex order.
+        let mut filtered: DiGraph<(), ()> = DiGraph::new();
+        let n = g.node_count();
+        let mut idx_map: Vec<NodeIndex> = Vec::with_capacity(n);
+        for _ in 0..n {
+            idx_map.push(filtered.add_node(()));
+        }
+        for edge in g.edge_references() {
+            let s = edge.source();
+            let t = edge.target();
+            let le = LabelEdge {
+                source: g[s].label(),
+                target: g[t].label(),
+            };
+            if cuts.contains(&le) {
+                continue;
+            }
+            filtered.add_edge(idx_map[s.index()], idx_map[t.index()], ());
+        }
+        // Map filtered NodeIndex back to original NodeIndex (they share index()).
+        petgraph::algo::tarjan_scc(&filtered)
+            .into_iter()
+            .map(|comp| comp.into_iter().map(|n| NodeIndex::new(n.index())).collect())
+            .collect()
+    }
+}
+
 /// Build the target ModulePath from a `crate::...` reference's path string.
 /// We reconstruct from the full path so granularity>1 can resolve deeper.
 fn target_module_path(target_top: &str, full_path: &str) -> ModulePath {
